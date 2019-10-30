@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <script crossorigin src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
+  <script crossorigin src="https://unpkg.com/react@16/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@16/umd/react-dom.development.js"></script>
+</head>
+
+<body>
+  <!-- consoleの中でconvertVueToReact(app)でReactに変換する -->
+  <div id="app">
+    <p data-renders="count">{{ count }}</p>
+    <button v-on:click="increase">Increase</button>
+  </div>
+  <script>
+    var app = new Vue({
+      el: "#app",
+      data: {
+        count: 1
+      },
+      methods: {
+        increase: function () {
+          this.count = this.count + 1;
+          return this.count;
+        }
+      }
+    });
+
+    const convertVueToReact = function convertVueToReact(app) {
+      // React用の外部ストア
+      const data = {
+        ...app._data,
+        ...app.$options.methods,
+        _observers: [],
+        _registerObservers: function _registerObservers(fn) {
+          const len = this._observers.push(fn);
+          return (function _unsubscribe() {
+            this._observers = this._observers.filter((obs, i) => i !== len - 1);
+          }).bind(this);
+        },
+        _broadcast: function _broadcast() {
+          this._observers.forEach(fn => {
+            fn(Object.entries(this));
+          })
+        }
+      };
+
+      // 再帰的にDOMのツリーを変換する
+      const buildTree = (node, state) => {
+        if (!node.tag) {
+          return node.text;
+        }
+
+        const root = {};
+        root.listeners = {};
+        root.children = [];
+
+        if (node.children && node.children.length !== 0) {
+          for (let child of node.children) {
+            // ここが再帰的な処理
+            root.children.push(buildTree(child, state));
+          }
+        }
+
+        // ステート反映必要なエレメントか、そしてステートの何を反映するかのロジック
+        if (node.data.attrs && "data-renders" in node.data.attrs) {
+          if (state) {
+            root.value = state[node.data.attrs[`data-renders`]];
+            // もともとあった値を削除する
+            root.children = root.children.filter(child => typeof child !== "string");
+          }
+        }
+
+        // Vueのリスナーをエレメントに登録し、外部ストアの更新と同時に、
+        // subscribeしたobserverに更新を通知するようにする
+        if (node.data && node.data.on) {
+          Object.keys(node.data.on).forEach(listener => {
+            const name = node.data.on[listener].fns.name.split(" ")[1];
+
+            const reactHandlerName = `on` +
+              listener.charAt(0).toUpperCase() + listener.slice(1);
+
+            root.listeners[reactHandlerName] = function () {
+              data[name]();
+              data._broadcast();
+            };
+          });
+        }
+
+        root.type = node.tag;
+
+        return React.createElement(
+          root.type,
+          { ...root.listeners },
+          root.value,
+          ...root.children
+        );
+      };
+
+      const App = () => {
+        const [appState, setAppState] = React.useState(null);
+
+        React.useEffect(() => {
+          const unsubscribe = data._registerObservers(upd => {
+            const cleanState = upd.filter(([key, val]) => key[0] !== "_");
+            setAppState(Object.fromEntries(cleanState));
+          });
+          return unsubscribe;
+        });
+
+        React.useEffect(() => {
+          if (appState) {
+            console.log(`🔥Updated in React: `, appState.count)
+          }
+        }, [appState]);
+
+        return buildTree(app._vnode, appState);
+      }
+
+      const reactApp = React.createElement(App);
+
+      ReactDOM.render(reactApp, document.querySelector("#app"));
+    }
+  </script>
+</body>
+
+</html>
